@@ -20,36 +20,39 @@ def load_data():
     baci_df = pd.read_csv("baci_85_sample.csv")
     codes_df = pd.read_csv("country_codes_sample.csv")
     
-    # 2. baci_85_sample.csv의 결측치 처리
+    # 결측치 처리
     baci_df = baci_df.dropna()
     
-    # --- 자동 컬럼 매핑 로직 ---
-    # BACI 데이터의 국가 코드 컬럼 감지 (일반적으로 'i' 또는 'country_code')
-    baci_target_col = 'i' if 'i' in baci_df.columns else ('country_code' if 'country_code' in baci_df.columns else baci_df.columns[0])
+    # --- 자동 컬럼 매핑 및 데이터 타입 통일 ---
+    # BACI 데이터의 수출국 코드 컬럼 감지 (기본 'i')
+    baci_col = 'i' if 'i' in baci_df.columns else ('country_code' if 'country_code' in baci_df.columns else baci_df.columns[0])
     
-    # 국가 코드 데이터의 매핑용 코드 컬럼 감지 ('country_code', 'code' 등)
-    codes_target_col = 'country_code' if 'country_code' in codes_df.columns else ('code' if 'code' in codes_df.columns else codes_df.columns[0])
+    # 국가 코드 데이터의 매핑용 코드 컬럼 감지
+    codes_col = 'country_code' if 'country_code' in codes_df.columns else ('code' if 'code' in codes_df.columns else codes_df.columns[0])
     
-    # 국가명 컬럼 감지 ('country_name_abbreviation', 'country_name', 'country' 등)
+    # 국가명 컬럼 감지
     if 'country_name_abbreviation' in codes_df.columns:
-        codes_name_col = 'country_name_abbreviation'
+        name_col = 'country_name_abbreviation'
     elif 'country_name' in codes_df.columns:
-        codes_name_col = 'country_name'
+        name_col = 'country_name'
     elif 'country' in codes_df.columns:
-        codes_name_col = 'country'
+        name_col = 'country'
     else:
-        codes_name_col = codes_df.columns[1] if len(codes_df.columns) > 1 else codes_df.columns[0]
+        name_col = codes_df.columns[1] if len(codes_df.columns) > 1 else codes_df.columns[0]
+
+    # ★ 핵심 해결: 병합 키의 데이터 타입을 모두 문자열(String)로 변환하여 매칭 오류 방지
+    baci_df[baci_col] = baci_df[baci_col].astype(str)
+    codes_df[codes_col] = codes_df[codes_col].astype(str)
 
     # 데이터 병합
-    df = pd.merge(baci_df, codes_df, left_on=baci_target_col, right_on=codes_target_col, how='left')
+    df = pd.merge(baci_df, codes_df, left_on=baci_col, right_on=codes_col, how='left')
         
-    # 가상의 컬럼 이름 설정 (실제 데이터에 맞게 수정)
+    # 필수 변수 매핑 (수출액, 국가명, 연도)
     df['export_value'] = df['v'] if 'v' in df.columns else (df['export_value'] if 'export_value' in df.columns else 0)
-    # 병합된 국가명이 없을 경우 'Unknown'으로 처리
-    df['country_name'] = df[codes_name_col].fillna('Unknown')
+    df['country_name'] = df[name_col].fillna('Unknown')
     df['year'] = df['t'] if 't' in df.columns else (df['year'] if 'year' in df.columns else 2020)
 
-    # 무역액 등급 (대, 중, 소) 임의 기준 부여 (3분위수 기준, 중복값 에러 방지를 위해 rank 사용)
+    # 무역액 등급 (대, 중, 소) - 중복값 에러 방지를 위해 rank 사용
     df['trade_tier'] = pd.qcut(df['export_value'].rank(method='first'), q=3, labels=['소', '중', '대'])
     
     return df
@@ -59,10 +62,12 @@ df = load_data()
 # --- 사이드바 ---
 st.sidebar.header("필터 설정")
 
-# 국가 선택 필터 (Unknown이 아닌 국가들만 기본으로 선택되도록 처리)
-country_list = df['country_name'].unique().tolist()
-valid_countries = [c for c in country_list if c != 'Unknown']
-default_selection = valid_countries[:5] if valid_countries else country_list[:5]
+# 국가 선택 필터 (Unknown이 아닌 실제 국가들만 기본으로 표시)
+country_list = [c for c in df['country_name'].unique().tolist() if c != 'Unknown']
+if not country_list:  # 만약 여전히 병합이 안 되었다면 Unknown 표시
+    country_list = df['country_name'].unique().tolist()
+
+default_selection = country_list[:5] if len(country_list) >= 5 else country_list
 
 selected_countries = st.sidebar.multiselect("국가 선택", options=country_list, default=default_selection)
 
