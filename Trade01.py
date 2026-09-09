@@ -4,74 +4,72 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# 한글 폰트 설정 (환경에 맞게 수정: Windows는 'Malgun Gothic', Mac은 'AppleGothic')
+# 한글 폰트 설정
 plt.rc('font', family='Malgun Gothic')
 plt.rcParams['axes.unicode_minus'] = False
 
 # 페이지 레이아웃 넓게 설정
 st.set_page_config(layout="wide", page_title="무역 분석 대시보드")
-
-# 1. 타이틀: 무역 분석 대시보드
 st.title("무역 분석 대시보드")
 
+# --- 1. 파일 불러오기 및 실제 컬럼명 화면 출력 (디버깅용) ---
 @st.cache_data
-def load_data():
-    # 데이터 불러오기
-    baci_df = pd.read_csv("baci_85_sample.csv")
-    codes_df = pd.read_csv("country_codes_sample.csv")
+def load_raw_data():
+    return pd.read_csv("baci_85_sample.csv"), pd.read_csv("country_codes_sample.csv")
+
+baci_df, codes_df = load_raw_data()
+baci_df = baci_df.dropna()
+
+# 화면 상단에 실제 컬럼명 표시
+st.info(f"📌 BACI 데이터 컬럼명: {baci_df.columns.tolist()}")
+st.info(f"📌 국가코드 데이터 컬럼명: {codes_df.columns.tolist()}")
+st.warning("💡 위 파란색 박스에 뜬 컬럼명을 확인하시고, 코드 안의 '핵심 수정 포인트' 부분을 실제 이름으로 바꿔주세요.")
+
+# --- 2. ★ 여기가 핵심 수정 포인트입니다 ★ ---
+# 아래 세 줄의 ' ' 안의 텍스트를 위 파란색 박스에서 확인한 실제 이름으로 변경해 주세요.
+baci_col = 'i'             # BACI 파일에서 수출국 코드를 의미하는 컬럼 (예: 'i', 'country_code' 등)
+codes_col = 'country_code' # 국가코드 파일에서 매핑용 코드를 의미하는 컬럼 (예: 'country_code', 'code' 등)
+name_col = 'country_name'  # 국가코드 파일에서 실제 국가명을 의미하는 컬럼 (예: 'country_name_abbreviation', 'country_name' 등)
+# ----------------------------------------------
+
+@st.cache_data
+def process_data(baci, codes, b_col, c_col, n_col):
+    df = baci.copy()
     
-    # 결측치 처리
-    baci_df = baci_df.dropna()
-    
-    # --- 자동 컬럼 매핑 및 데이터 타입 통일 ---
-    # BACI 데이터의 수출국 코드 컬럼 감지 (기본 'i')
-    baci_col = 'i' if 'i' in baci_df.columns else ('country_code' if 'country_code' in baci_df.columns else baci_df.columns[0])
-    
-    # 국가 코드 데이터의 매핑용 코드 컬럼 감지
-    codes_col = 'country_code' if 'country_code' in codes_df.columns else ('code' if 'code' in codes_df.columns else codes_df.columns[0])
-    
-    # 국가명 컬럼 감지
-    if 'country_name_abbreviation' in codes_df.columns:
-        name_col = 'country_name_abbreviation'
-    elif 'country_name' in codes_df.columns:
-        name_col = 'country_name'
-    elif 'country' in codes_df.columns:
-        name_col = 'country'
+    # 입력한 컬럼명이 실제 데이터에 존재하는지 확인 후 병합
+    if b_col in df.columns and c_col in codes.columns:
+        df[b_col] = df[b_col].astype(str)
+        codes[c_col] = codes[c_col].astype(str)
+        df = pd.merge(df, codes, left_on=b_col, right_on=c_col, how='left')
+        df['country_name'] = df[n_col].fillna('Unknown') if n_col in df.columns else 'Unknown'
     else:
-        name_col = codes_df.columns[1] if len(codes_df.columns) > 1 else codes_df.columns[0]
+        df['country_name'] = 'Unknown'
 
-    # ★ 핵심 해결: 병합 키의 데이터 타입을 모두 문자열(String)로 변환하여 매칭 오류 방지
-    baci_df[baci_col] = baci_df[baci_col].astype(str)
-    codes_df[codes_col] = codes_df[codes_col].astype(str)
-
-    # 데이터 병합
-    df = pd.merge(baci_df, codes_df, left_on=baci_col, right_on=codes_col, how='left')
-        
-    # 필수 변수 매핑 (수출액, 국가명, 연도)
+    # 필수 변수 매핑 (수출액, 연도)
     df['export_value'] = df['v'] if 'v' in df.columns else (df['export_value'] if 'export_value' in df.columns else 0)
-    df['country_name'] = df[name_col].fillna('Unknown')
     df['year'] = df['t'] if 't' in df.columns else (df['year'] if 'year' in df.columns else 2020)
 
-    # 무역액 등급 (대, 중, 소) - 중복값 에러 방지를 위해 rank 사용
+    # 무역액 등급 설정
     df['trade_tier'] = pd.qcut(df['export_value'].rank(method='first'), q=3, labels=['소', '중', '대'])
-    
     return df
 
-df = load_data()
+df = process_data(baci_df, codes_df, baci_col, codes_col, name_col)
 
 # --- 사이드바 ---
 st.sidebar.header("필터 설정")
 
-# 국가 선택 필터 (Unknown이 아닌 실제 국가들만 기본으로 표시)
-country_list = [c for c in df['country_name'].unique().tolist() if c != 'Unknown']
-if not country_list:  # 만약 여전히 병합이 안 되었다면 Unknown 표시
-    country_list = df['country_name'].unique().tolist()
+# 국가 선택 필터 (Unknown 제외 로직 강화)
+country_list = df['country_name'].dropna().unique().tolist()
+valid_countries = [c for c in country_list if c != 'Unknown']
 
-default_selection = country_list[:5] if len(country_list) >= 5 else country_list
+# 만약 매핑이 실패해서 리스트가 비어있다면 Unknown이라도 표시하여 에러 방지
+if not valid_countries:
+    valid_countries = country_list
 
-selected_countries = st.sidebar.multiselect("국가 선택", options=country_list, default=default_selection)
+default_selection = valid_countries[:5] if len(valid_countries) >= 5 else valid_countries
+selected_countries = st.sidebar.multiselect("국가 선택", options=valid_countries, default=default_selection)
 
-# 무역액 등급 선택 (대, 중, 소)
+# 무역액 등급 선택
 tier_list = ['대', '중', '소']
 selected_tiers = st.sidebar.multiselect("무역액 등급 선택", options=tier_list, default=tier_list)
 
@@ -82,8 +80,6 @@ filtered_df = df[
 ]
 
 # --- 메인 화면 (오른쪽) ---
-
-# 3. 총거래 건수 및 총 수출액(달러)
 col1, col2 = st.columns(2)
 with col1:
     st.metric(label="총거래 건수", value=f"{len(filtered_df):,} 건")
@@ -93,12 +89,10 @@ with col2:
 
 st.markdown("---")
 
-# 4. 국가*연도 수출액 히트맵(상위 8개국) & 무역액 등급분포
 col3, col4 = st.columns(2)
 
 with col3:
     st.subheader("국가*연도 수출액 히트맵 (상위 8개국)")
-    # 상위 8개국 추출
     top8_countries = filtered_df.groupby('country_name')['export_value'].sum().nlargest(8).index
     df_top8 = filtered_df[filtered_df['country_name'].isin(top8_countries)]
     
@@ -124,9 +118,7 @@ with col4:
 
 st.markdown("---")
 
-# 5. 상위 5개국 * 무역액 등급 교차표 (원본건수 / 정규화비율)
 st.subheader("상위 5개국 * 무역액 등급 교차표")
-# 상위 5개국 추출
 top5_countries = filtered_df.groupby('country_name')['export_value'].sum().nlargest(5).index
 df_top5 = filtered_df[filtered_df['country_name'].isin(top5_countries)]
 
