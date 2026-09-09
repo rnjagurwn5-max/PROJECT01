@@ -1,137 +1,140 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import matplotlib.pyplot as plt
-import seaborn as sns
 
-# 한글 폰트 설정
-plt.rc('font', family='Malgun Gothic')
-plt.rcParams['axes.unicode_minus'] = False
-
-# 페이지 레이아웃 넓게 설정
-st.set_page_config(layout="wide", page_title="무역 분석 대시보드")
+# 1. 타이틀: 무역 분석 대시보드[cite: 1]
+st.set_page_config(page_title="무역 분석 대시보드", layout="wide")
 st.title("무역 분석 대시보드")
 
-# --- 1. 파일 불러오기 및 실제 컬럼명 화면 출력 (디버깅용) ---
+# 데이터 로드 및 전처리 함수
 @st.cache_data
-def load_raw_data():
-    return pd.read_csv("baci_85_sample.csv"), pd.read_csv("country_codes_sample.csv")
+def load_data():
+    # 데이터 불러오기[cite: 1]
+    # 실제 환경에서는 파일 경로를 확인하세요. 
+    try:
+        baci = pd.read_csv('baci_85_sample.csv')
+        codes = pd.read_csv('country_codes_sample.csv')
+    except FileNotFoundError:
+        st.error("데이터 파일을 찾을 수 없습니다. baci_85_sample.csv와 country_codes_sample.csv가 같은 폴더에 있는지 확인하세요.")
+        return pd.DataFrame()
 
-baci_df, codes_df = load_raw_data()
-baci_df = baci_df.dropna()
-
-# 화면 상단에 실제 컬럼명 표시
-st.info(f"📌 BACI 데이터 컬럼명: {baci_df.columns.tolist()}")
-st.info(f"📌 국가코드 데이터 컬럼명: {codes_df.columns.tolist()}")
-st.warning("💡 위 파란색 박스에 뜬 컬럼명을 확인하시고, 코드 안의 '핵심 수정 포인트' 부분을 실제 이름으로 바꿔주세요.")
-
-# --- 2. ★ 여기가 핵심 수정 포인트입니다 ★ ---
-# 아래 세 줄의 ' ' 안의 텍스트를 위 파란색 박스에서 확인한 실제 이름으로 변경해 주세요.
-baci_col = 'i'             # BACI 파일에서 수출국 코드를 의미하는 컬럼 (예: 'i', 'country_code' 등)
-codes_col = 'country_code' # 국가코드 파일에서 매핑용 코드를 의미하는 컬럼 (예: 'country_code', 'code' 등)
-name_col = 'country_name'  # 국가코드 파일에서 실제 국가명을 의미하는 컬럼 (예: 'country_name_abbreviation', 'country_name' 등)
-# ----------------------------------------------
-
-@st.cache_data
-def process_data(baci, codes, b_col, c_col, n_col):
-    df = baci.copy()
+    # 2. baci_85_sample.csv의 결측치 처리[cite: 1]
+    baci = baci.dropna() 
     
-    # 입력한 컬럼명이 실제 데이터에 존재하는지 확인 후 병합
-    if b_col in df.columns and c_col in codes.columns:
-        df[b_col] = df[b_col].astype(str)
-        codes[c_col] = codes[c_col].astype(str)
-        df = pd.merge(df, codes, left_on=b_col, right_on=c_col, how='left')
-        df['country_name'] = df[n_col].fillna('Unknown') if n_col in df.columns else 'Unknown'
+    # 국가명 매핑 (데이터셋 구조에 맞게 수정 필요: 예시로 수출국 'i', 국가코드 'country_code' 가정)
+    if 'i' in baci.columns and 'country_code' in codes.columns:
+        df = pd.merge(baci, codes, left_on='i', right_on='country_code', how='left')
+        df['country_name'] = df['country_name'].fillna('Unknown')
     else:
-        df['country_name'] = 'Unknown'
+        # 테스트용 임시 컬럼 생성 (실제 데이터에 맞춰 변경 필요)
+        df = baci.copy()
+        df['country_name'] = df['i'] if 'i' in df.columns else 'Unknown'
+        
+    # 무역액 등급(대, 중, 소) 파생변수 생성 ('v'가 수출액을 의미한다고 가정)
+    if 'v' in df.columns:
+        q33 = df['v'].quantile(0.33)
+        q66 = df['v'].quantile(0.66)
+        def assign_grade(val):
+            if val <= q33: return '소'
+            elif val <= q66: return '중'
+            else: return '대'
+        df['trade_grade'] = df['v'].apply(assign_grade)
+    else:
+        df['trade_grade'] = '중' # Fallback
+        df['v'] = 1000 # Fallback
+        
+    # 't' 컬럼이 연도라고 가정
+    if 't' not in df.columns:
+        df['t'] = 2023 
 
-    # 필수 변수 매핑 (수출액, 연도)
-    df['export_value'] = df['v'] if 'v' in df.columns else (df['export_value'] if 'export_value' in df.columns else 0)
-    df['year'] = df['t'] if 't' in df.columns else (df['year'] if 'year' in df.columns else 2020)
-
-    # 무역액 등급 설정
-    df['trade_tier'] = pd.qcut(df['export_value'].rank(method='first'), q=3, labels=['소', '중', '대'])
     return df
 
-df = process_data(baci_df, codes_df, baci_col, codes_col, name_col)
+df = load_data()
 
-# --- 사이드바 ---
-st.sidebar.header("필터 설정")
-
-# 국가 선택 필터 (Unknown 제외 로직 강화)
-country_list = df['country_name'].dropna().unique().tolist()
-valid_countries = [c for c in country_list if c != 'Unknown']
-
-# 만약 매핑이 실패해서 리스트가 비어있다면 Unknown이라도 표시하여 에러 방지
-if not valid_countries:
-    valid_countries = country_list
-
-default_selection = valid_countries[:5] if len(valid_countries) >= 5 else valid_countries
-selected_countries = st.sidebar.multiselect("국가 선택", options=valid_countries, default=default_selection)
-
-# 무역액 등급 선택
-tier_list = ['대', '중', '소']
-selected_tiers = st.sidebar.multiselect("무역액 등급 선택", options=tier_list, default=tier_list)
-
-# 필터링 적용
-filtered_df = df[
-    (df['country_name'].isin(selected_countries)) & 
-    (df['trade_tier'].isin(selected_tiers))
-]
-
-# --- 메인 화면 (오른쪽) ---
-col1, col2 = st.columns(2)
-with col1:
-    st.metric(label="총거래 건수", value=f"{len(filtered_df):,} 건")
-with col2:
-    total_export = filtered_df['export_value'].sum()
-    st.metric(label="총 수출액(달러)", value=f"${total_export:,.2f}")
-
-st.markdown("---")
-
-col3, col4 = st.columns(2)
-
-with col3:
-    st.subheader("국가*연도 수출액 히트맵 (상위 8개국)")
-    top8_countries = filtered_df.groupby('country_name')['export_value'].sum().nlargest(8).index
-    df_top8 = filtered_df[filtered_df['country_name'].isin(top8_countries)]
+if not df.empty:
+    # ------------------- 사이드바: 필터 -------------------
+    st.sidebar.header("필터 설정")
     
-    if not df_top8.empty:
-        pivot_df = df_top8.pivot_table(index='country_name', columns='year', values='export_value', aggfunc='sum')
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(pivot_df, cmap='YlGnBu', annot=False, ax=ax)
-        plt.ylabel("국가")
-        plt.xlabel("연도")
-        st.pyplot(fig)
-    else:
-        st.info("조건에 맞는 데이터가 없습니다.")
+    # 국가 선택, 무역액 등급 선택(대,중,소) 필터[cite: 1]
+    country_list = sorted(df['country_name'].unique().tolist())
+    selected_countries = st.sidebar.multiselect("국가 선택", country_list, default=country_list[:5])
+    
+    grade_list = ['대', '중', '소']
+    selected_grades = st.sidebar.multiselect("무역액 등급 선택", grade_list, default=grade_list)
+    
+    # 필터 적용
+    filtered_df = df[
+        (df['country_name'].isin(selected_countries)) & 
+        (df['trade_grade'].isin(selected_grades))
+    ]
 
-with col4:
-    st.subheader("무역액 등급분포")
-    if not filtered_df.empty:
-        tier_counts = filtered_df['trade_tier'].value_counts().reset_index()
-        tier_counts.columns = ['무역액 등급', '건수']
-        fig_pie = px.pie(tier_counts, names='무역액 등급', values='건수', hole=0.3, color_discrete_sequence=px.colors.qualitative.Pastel)
+    # ------------------- 오른쪽 화면 (메인) -------------------
+    
+    # 3. 총거래 건수 / 총 수출액(달러)[cite: 1]
+    col1, col2 = st.columns(2)
+    with col1:
+        total_transactions = len(filtered_df)
+        st.metric(label="총 거래 건수", value=f"{total_transactions:,} 건")
+    with col2:
+        total_export_value = filtered_df['v'].sum()
+        st.metric(label="총 수출액 (달러)", value=f"${total_export_value:,.2f}")
+        
+    st.markdown("---")
+
+    # 4. 국가*연도 수출액 히트맵 (상위 8개국) / 무역액 등급분포[cite: 1]
+    row1_col1, row1_col2 = st.columns(2)
+    
+    with row1_col1:
+        st.subheader("국가별/연도별 수출액 히트맵 (상위 8개국)")
+        # 상위 8개국 추출
+        top_8_countries = df.groupby('country_name')['v'].sum().nlargest(8).index
+        heatmap_data = df[df['country_name'].isin(top_8_countries)]
+        heatmap_pivot = heatmap_data.groupby(['country_name', 't'])['v'].sum().reset_index()
+        
+        fig_heatmap = px.density_heatmap(
+            heatmap_pivot, x='t', y='country_name', z='v',
+            labels={'t': '연도', 'country_name': '국가', 'v': '수출액'},
+            color_continuous_scale="Viridis"
+        )
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+
+    with row1_col2:
+        st.subheader("무역액 등급 분포")
+        grade_dist = filtered_df['trade_grade'].value_counts().reset_index()
+        grade_dist.columns = ['무역액 등급', '건수']
+        fig_pie = px.pie(
+            grade_dist, names='무역액 등급', values='건수',
+            color='무역액 등급', color_discrete_map={'대':'#EF553B', '중':'#636EFA', '소':'#00CC96'}
+        )
         st.plotly_chart(fig_pie, use_container_width=True)
-    else:
-        st.info("조건에 맞는 데이터가 없습니다.")
+        
+    st.markdown("---")
 
-st.markdown("---")
-
-st.subheader("상위 5개국 * 무역액 등급 교차표")
-top5_countries = filtered_df.groupby('country_name')['export_value'].sum().nlargest(5).index
-df_top5 = filtered_df[filtered_df['country_name'].isin(top5_countries)]
-
-col5, col6 = st.columns(2)
-if not df_top5.empty:
-    with col5:
-        st.markdown("**원본건수**")
-        cross_tab_count = pd.crosstab(df_top5['country_name'], df_top5['trade_tier'])
-        st.dataframe(cross_tab_count, use_container_width=True)
-
-    with col6:
-        st.markdown("**정규화비율**")
-        cross_tab_norm = pd.crosstab(df_top5['country_name'], df_top5['trade_tier'], normalize='index')
-        st.dataframe(cross_tab_norm.style.format("{:.2%}"), use_container_width=True)
-else:
-    st.info("조건에 맞는 데이터가 없습니다.")
+    # 5. 상위 5개국 * 무역액 등급 교차표 (원본건수 / 정규화비율)[cite: 1]
+    st.subheader("상위 5개국 무역액 등급 교차표")
+    
+    # 상위 5개국 추출
+    top_5_countries = df.groupby('country_name')['v'].sum().nlargest(5).index
+    cross_df = df[df['country_name'].isin(top_5_countries)]
+    
+    row2_col1, row2_col2 = st.columns(2)
+    
+    with row2_col1:
+        st.markdown("**원본 건수**")
+        crosstab_raw = pd.crosstab(cross_df['country_name'], cross_df['trade_grade'])
+        # 등급 순서 정렬
+        for col in ['대', '중', '소']:
+            if col not in crosstab_raw.columns:
+                crosstab_raw[col] = 0
+        crosstab_raw = crosstab_raw[['대', '중', '소']]
+        st.dataframe(crosstab_raw, use_container_width=True)
+        
+    with row2_col2:
+        st.markdown("**정규화 비율 (행 기준 백분율)**")
+        crosstab_norm = pd.crosstab(cross_df['country_name'], cross_df['trade_grade'], normalize='index') * 100
+        for col in ['대', '중', '소']:
+            if col not in crosstab_norm.columns:
+                crosstab_norm[col] = 0.0
+        crosstab_norm = crosstab_norm[['대', '중', '소']]
+        # 소수점 2자리 포맷팅
+        st.dataframe(crosstab_norm.style.format("{:.2f}%"), use_container_width=True)
