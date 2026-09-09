@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# 1. 타이틀: 🌐무역 분석 대시보드[cite: 2]
+# 1. 타이틀: 무역 분석 대시보드[cite: 2]
 st.set_page_config(page_title="무역 분석 대시보드", layout="wide")
-st.title("무역 분석 대시보드")
+st.title("🌐무역 분석 대시보드")
 
 @st.cache_data
 def load_data():
